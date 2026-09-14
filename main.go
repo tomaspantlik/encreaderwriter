@@ -11,9 +11,20 @@ import (
 	"io"
 )
 
+const (
+	verMajor uint16 = 1
+	verMinor uint16 = 1
+	verPatch uint16 = 0
+	magic           = "encreaderwriter"
+)
+
 /*
 writer:
 - header:
+	- string("encreaderwriter")
+	- uint16(version_major)
+	- uint16(version_minor)
+	- uint16(version_patch)
 	- uint64(length of encrypted AES key)
 	- []byte(encrypted AES key)
 - message:
@@ -29,6 +40,69 @@ type EncrypWriter struct {
 }
 
 // TODO: proper tests
+// TODO: documentation
+
+func writeHeader(writer io.Writer) error {
+	if _, err := writer.Write([]byte(magic)); err != nil {
+		return err
+	}
+
+	err := binary.Write(writer, binary.LittleEndian, verMajor)
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(writer, binary.LittleEndian, verMinor)
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(writer, binary.LittleEndian, verPatch)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func checkHeader(reader io.Reader) error {
+	var m = make([]byte, len(magic))
+	if _, err := reader.Read(m); err != nil {
+		return err
+	}
+	if string(m) != magic {
+		return fmt.Errorf("missing magic header")
+	}
+
+	var major uint16
+	if err := binary.Read(reader, binary.LittleEndian, &major); err != nil {
+		return err
+	} else {
+		if major != verMajor {
+			return fmt.Errorf("major version (%d) != %d", major, verMajor)
+		}
+	}
+
+	var minor uint16
+	if err := binary.Read(reader, binary.LittleEndian, &minor); err != nil {
+		return err
+	} else {
+		if minor != verMinor {
+			return fmt.Errorf("minor version (%d) != %d", minor, verMinor)
+		}
+	}
+
+	var patch uint16
+	if err := binary.Read(reader, binary.LittleEndian, &patch); err != nil {
+		return err
+	} else {
+		if patch != verPatch {
+			return fmt.Errorf("patch version (%d) != %d", patch, verPatch)
+		}
+	}
+
+	return nil
+}
 
 /*
 OpenEncryptWriter() opens EncryptWriter with underlying io.Writer and writes
@@ -45,6 +119,10 @@ func OpenEncryptWriter(pubKey *rsa.PublicKey, writer io.Writer) (ew EncrypWriter
 	)
 	if err != nil {
 		return EncrypWriter{}, fmt.Errorf("rsa.EncryptOAEP(): %w", err)
+	}
+
+	if err := writeHeader(writer); err != nil {
+		return ew, fmt.Errorf("error writing header: %w", err)
 	}
 
 	err = binary.Write(writer, binary.LittleEndian, uint64(len(encryptedAESKey)))
@@ -108,6 +186,10 @@ type Decryptor struct {
 OpenDecryptor() opens Decryptor from undrylying io.Reader for reading whole messages
 */
 func OpenDecryptor(key *rsa.PrivateKey, reader io.Reader) (d Decryptor, err error) {
+	if err := checkHeader(reader); err != nil {
+		return Decryptor{}, fmt.Errorf("error opening file: %w", err)
+	}
+
 	var keyLength uint64
 	if err := binary.Read(reader, binary.LittleEndian, &keyLength); err != nil {
 		return Decryptor{}, fmt.Errorf("error reading encrypted AES key: %w", err)
